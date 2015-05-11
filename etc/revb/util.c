@@ -163,12 +163,31 @@ void put_16_be(uint16_t value, FILE *infile)
     size_t bytes_written = fwrite(buf, 1, 2, infile);
     CHECK_FILE(bytes_written != 2, infile, "fwrite");
 }
+
+void put_16_le(uint16_t value, FILE *infile)
+{
+    unsigned char bufTemp[2], buf[2];
+    write_16_be(value, bufTemp);
+	for (int i = 0; i < 2; i++)
+		buf[1-i] = bufTemp[i];
+    size_t bytes_written = fwrite(buf, 1, 2, infile);
+    CHECK_FILE(bytes_written != 2, infile, "fwrite");
+}
+
 void put_16_be_seek(uint16_t value, long offset, FILE *infile)
 {
     CHECK_ERRNO(fseek(infile, offset, SEEK_SET) != 0, "fseek");
 
     put_16_be(value, infile);
 }
+
+void put_16_le_seek(uint16_t value, long offset, FILE *infile)
+{
+    CHECK_ERRNO(fseek(infile, offset, SEEK_SET) != 0, "fseek");
+
+    put_16_le(value, infile);
+}
+
 void put_32_be(uint32_t value, FILE *infile)
 {
     unsigned char buf[4];
@@ -176,12 +195,31 @@ void put_32_be(uint32_t value, FILE *infile)
     size_t bytes_written = fwrite(buf, 1, 4, infile);
     CHECK_FILE(bytes_written != 4, infile, "fwrite");
 }
+
+void put_32_le(uint32_t value, FILE *infile)
+{
+    unsigned char bufTemp[4], buf[4];
+    write_32_be(value, bufTemp);
+	for (int i = 0; i < 4; i++)
+		buf[3-i] = bufTemp[i];
+    size_t bytes_written = fwrite(buf, 1, 4, infile);
+    CHECK_FILE(bytes_written != 4, infile, "fwrite");
+}
+
 void put_32_be_seek(uint32_t value, long offset, FILE *infile)
 {
     CHECK_ERRNO(fseek(infile, offset, SEEK_SET) != 0, "fseek");
 
     put_32_be(value, infile);
 }
+
+void put_32_le_seek(uint32_t value, long offset, FILE *infile)
+{
+    CHECK_ERRNO(fseek(infile, offset, SEEK_SET) != 0, "fseek");
+
+    put_32_le(value, infile);
+}
+
 void put_bytes(FILE *infile, const unsigned char *buf, size_t byte_count)
 {
     size_t bytes_written = fwrite(buf, 1, byte_count, infile);

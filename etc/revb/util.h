@@ -33,9 +33,13 @@ void get_bytes_seek(long offset, FILE *infile, unsigned char *buf, size_t byte_c
 void put_byte(uint8_t value, FILE *infile);
 void put_byte_seek(uint8_t value, long offset, FILE *infile);
 void put_16_be(uint16_t value, FILE *infile);
+void put_16_le(uint16_t value, FILE *infile);
 void put_16_be_seek(uint16_t value, long offset, FILE *infile);
+void put_16_le_seek(uint16_t value, long offset, FILE *infile);
 void put_32_be(uint32_t value, FILE *infile);
+void put_32_le(uint32_t value, FILE *infile);
 void put_32_be_seek(uint32_t value, long offset, FILE *infile);
+void put_32_le_seek(uint32_t value, long offset, FILE *infile);
 void put_bytes(FILE *infile, const unsigned char *buf, size_t byte_count);
 void put_bytes_seek(long offset, FILE *infile, const unsigned char *buf, size_t byte_count);
 
