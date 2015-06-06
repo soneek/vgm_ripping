@@ -26,12 +26,14 @@
 
 #define VERSION "0.5"
 #define MAX_CHANNELS 12
+#define TRACK_COUNT 6
 
-enum ouput_strm
+enum output_strm
 {
 	BRSTM = 1,
 	BCSTM = 2,
 	BFSTM = 3,
+	SSB_IDSP = 4,
 };
 
 enum odd_options
@@ -54,7 +56,11 @@ void (*put_16_seek)(uint16_t value, long offset, FILE *infile) = put_16_be_seek;
 void (*put_32_seek)(uint32_t value, long offset, FILE *infile) = put_32_be_seek;
 	
 static void build(const char *brstm_name, const char *dsp_names [],
-        int dsp_count, enum odd_options options, enum ouput_strm strm);
+        int dsp_count, enum odd_options options, enum output_strm strm);
+
+static void build_brstm(const char *brstm_name, const char *dsp_names[],
+        int dsp_count, enum odd_options options);
+		
 static uint32_t samples_to_nibbles(uint32_t samples);
 static uint32_t nibbles_to_samples(uint32_t nibbles);
 
@@ -80,6 +86,8 @@ static const uint8_t seek_name[4] = {'S','E','E','K'};
 
 static const uint8_t data_name[4] = {'D','A','T','A'};
 
+
+
 static void usage(void)
 {
     fprintf(stderr,
@@ -87,12 +95,14 @@ static void usage(void)
             "Version " VERSION " (built " __DATE__ ")\n\n"
             "Build .bcstm or .bfstm files from mono .dsp\n"
             "build usage:\n"
-//            "    %s --build-brstm dest.brstm source.dsp [sourceR.dsp%s] [options]\n"
+            "    %s --build-brstm dest.brstm source.dsp [sourceR.dsp%s] [options]\n"
 			"    %s --build-bcstm dest.bcstm source.dsp [sourceR.dsp%s] [options]\n"
 			"    %s --build-bfstm dest.bfstm source.dsp [sourceR.dsp%s] [options]\n"
+//			"    %s --build-idsp dest.idsp source.dsp [sourceR.dsp%s] [options]\n"
+			"  --volume-pan-chunk\n"
             "  --alternate-adpc-count\n"
             "\n",
-            bin_name, (MAX_CHANNELS > 2 ? " ..." : ""), bin_name, (MAX_CHANNELS > 2 ? " ..." : ""));
+            bin_name, (MAX_CHANNELS > 2 ? " ..." : ""), bin_name, (MAX_CHANNELS > 2 ? " ..." : ""), bin_name, (MAX_CHANNELS > 2 ? " ..." : ""));
 
     exit(EXIT_FAILURE);
 }
@@ -102,7 +112,7 @@ int main(int argc, char **argv)
     const char *brstm_name = NULL;
     const char *dsp_names[MAX_CHANNELS];
     enum revb_mode mode = MODE_INVALID;
-	enum ouput_strm strm = 1; 
+	enum output_strm strm = 1; 
     enum odd_options options = 0;
     int dsp_count = 0;
 	
@@ -117,16 +127,16 @@ int main(int argc, char **argv)
     /* process arguments */
     for (int i = 1; i < argc; i++)
     {
-/*        if (!strcmp("--build-brstm", argv[i]))
+        if (!strcmp("--build-brstm", argv[i]))
         {
             if (mode != MODE_INVALID) usage();
             if (i >= argc-1) usage();
-
+			
             mode = MODE_BUILD;
             brstm_name = argv[++i];
         }
-		*/
-		if (!strcmp("--build-bcstm", argv[i]))
+		
+		else if (!strcmp("--build-bcstm", argv[i]))
         {
             if (mode != MODE_INVALID) usage();
             if (i >= argc-1) usage();
@@ -152,7 +162,18 @@ int main(int argc, char **argv)
             brstm_name = argv[++i];
         }
 		
-        else if (!strcmp("--second-chunk-extra", argv[i]))
+		else if (!strcmp("--build-bfstm", argv[i]))
+        {
+            if (mode != MODE_INVALID) usage();
+            if (i >= argc-1) usage();
+			
+			strm = 3;
+			memcpy(STRM_sig, FSTM_sig, 4);
+            mode = MODE_BUILD;
+            brstm_name = argv[++i];
+        }
+		
+        else if (!strcmp("--volume-pan-chunk", argv[i]))
         {
             if (options & OPTION_SECOND_CHUNK_EXTRA) usage();
             options |= OPTION_SECOND_CHUNK_EXTRA;
@@ -187,7 +208,14 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Not comfortable with building > 12 channels\n");
                 exit(EXIT_FAILURE);
             }
-            build(brstm_name, dsp_names, dsp_count, options, strm);
+			switch (strm) {
+				case BRSTM:
+					build_brstm(brstm_name, dsp_names, dsp_count, options);
+				break;
+				case BCSTM:case BFSTM:
+					build(brstm_name, dsp_names, dsp_count, options, strm);
+				break;
+			}
             break;
         case MODE_EXAMINE:
         case MODE_EXTRACT:
@@ -257,7 +285,7 @@ static uint32_t nibbles_to_samples(uint32_t nibbles)
 
 
 void build(const char *brstm_name, const char *dsp_names[],
-        int dsp_count, enum odd_options options, enum ouput_strm strm)
+        int dsp_count, enum odd_options options, enum output_strm strm)
 {
     FILE *outfile = NULL;
     FILE *infiles[MAX_CHANNELS];
@@ -389,7 +417,7 @@ void build(const char *brstm_name, const char *dsp_names[],
 		put_32(0x50, outfile);
 		put_16(0x101, outfile);
 		put_16(0, outfile);
-		put_32(0x54 + ceil(dsp_count/2) * 8, outfile);
+		put_32(0x54 + ceil((double)dsp_count/2) * 8, outfile);
 		current_offset = 0x60;
 		
         put_byte_seek(2, current_offset, outfile);  /* DSP ADPCM */
@@ -444,11 +472,11 @@ void build(const char *brstm_name, const char *dsp_names[],
         put_16_seek(0x1f00, current_offset, outfile);
         put_16(0, outfile);
         put_32(0x18, outfile);
-        put_32_le(ceil(dsp_count/2), outfile);
+        put_32_le(ceil((double)dsp_count/2), outfile);
 		
 		current_offset += 12;
 		
-		for (int i = 0; i < ceil(dsp_count/2); i++) {
+		for (int i = 0; i < ceil((double)dsp_count/2); i++) {
 			put_16(0x4101, outfile);
 			put_16(0, outfile);
 			put_32(dsp_count * 12 + 8 + i * 0x14, outfile);
@@ -459,21 +487,22 @@ void build(const char *brstm_name, const char *dsp_names[],
 		for (int i = 0; i < dsp_count; i++) {
 			put_16(0x4102, outfile);
 			put_16(0, outfile);
-			put_32(4 + dsp_count * 8 + ceil(dsp_count/2) * 0x14 + i * 8, outfile);
+			put_32(4 + dsp_count * 8 + ceil((double)dsp_count/2) * 0x14 + i * 8, outfile);
 			current_offset += 8;
 		}
 		
 		// Writing volume, pan, channel info
-		for (int i = 0; i < ceil(dsp_count/2); i++) {
+		for (int i = 0; i < ceil((double)dsp_count/2); i++) {
 			put_byte(127, outfile);
 			put_byte(64, outfile);
 			put_16(0, outfile);
 			put_32(0x100, outfile);
 			put_32(0xc, outfile);
-//			put_32(abs(dsp_count - 2 * i), outfile);
-			put_32(2, outfile);
+			if (2*i+1 == dsp_count)
+				put_32(1, outfile);
+			else
+				put_32(2, outfile);
 			put_byte(2*i, outfile);
-//			put_byte(abs(2*i + 1 - dsp_count), outfile);
 			put_byte(2*i + 1, outfile);
 			put_16(0, outfile);
 			current_offset += 0x14;
@@ -607,6 +636,373 @@ void build(const char *brstm_name, const char *dsp_names[],
 
     /* done with file */
     put_32_seek(current_offset, file_size_offset, outfile);
+
+    /* close files */
+    for (int i = 0; i < dsp_count; i++)
+    {
+        CHECK_ERRNO(fclose(infiles[i]) != 0, "fclose");
+        infiles[i] = NULL;
+    }
+    CHECK_ERRNO(fclose(outfile) != 0, "fclose");
+    outfile = NULL;
+
+    fprintf(stderr, "Done!\n");
+}
+
+void build_brstm(const char *brstm_name, const char *dsp_names[],
+        int dsp_count, enum odd_options options)
+{
+    FILE *outfile = NULL;
+    FILE *infiles[MAX_CHANNELS];
+
+    for (int i = 0; i < MAX_CHANNELS; i++)
+    {
+        infiles[i] = NULL;
+    }
+
+    /* announce intentions */
+    fprintf(stderr, "Building %s from:\n",brstm_name);
+    for (int i = 0; i < dsp_count; i++)
+    {
+        fprintf(stderr, "  channel %d: %s\n", i, dsp_names[i]);
+    }
+
+    fprintf(stderr,"\n");
+
+    /* open input files */
+    for (int i = 0; i < dsp_count; i++)
+    {
+        infiles[i] = fopen(dsp_names[i], "rb");
+        CHECK_ERRNO(infiles[i] == NULL, "fopen of input file");
+    }
+
+    /* open output file */
+    outfile = fopen(brstm_name, "wb");
+    CHECK_ERRNO(outfile == NULL, "fopen of output file");
+
+    /* check that the DSPs agree */
+    uint8_t dsp_header0[0x60] = {0};
+
+    get_bytes_seek(0, infiles[0], dsp_header0, 0x1c);
+    for (int i = 1; i < dsp_count; i++)
+    {
+        uint8_t dsp_header1[0x1c];
+        get_bytes_seek(0, infiles[i], dsp_header1, 0x1c);
+        if (memcmp(dsp_header0, dsp_header1, 0x1c))
+        {
+            fprintf(stderr, "DSP headers do not agree\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    /* read important elements of the header */
+    uint32_t nibble_count = read_32_be(dsp_header0 + 4);
+    const uint32_t sample_rate = read_32_be(dsp_header0 + 8);
+    const uint16_t loop_flag = read_16_be(dsp_header0 + 0xc);
+    if (read_16_be(dsp_header0 + 0xe) != 0)
+    {
+        fprintf(stderr, "source file is not DSP ADPCM\n");
+        exit(EXIT_FAILURE);
+    }
+    const uint32_t loop_nibble = read_32_be(dsp_header0 + 0x10);
+
+    /* truncate to loop end (note that standard DSP loop end is the
+     * last nibble played, not one after) */
+    if (loop_flag && read_32_be(dsp_header0 + 0x14)+1 < nibble_count)
+        nibble_count = read_32_be(dsp_header0 + 0x14)+1;
+    const uint32_t sample_count = nibbles_to_samples(nibble_count);
+
+    /* now we can start building the file */
+    uint32_t current_offset = 0;
+    
+    /* begin RSTM header */
+	
+    put_bytes_seek(current_offset, outfile, RSTM_sig, 4);
+    put_32_be(0xFEFF0100, outfile);
+    current_offset += 8;
+    /* reserve space for file size */
+    const uint32_t file_size_offset = current_offset;
+    current_offset += 4;
+    /* header size and ?? */
+    put_16_be_seek(0x40, current_offset, outfile);
+    put_16_be(0x2, outfile);
+    current_offset += 4;
+    /* reserve space for chunk info */
+    const uint32_t head_chunk_offset_offset = current_offset;
+    const uint32_t head_chunk_size_offset = current_offset + 4;
+    current_offset += 8;
+    const uint32_t adpc_chunk_offset_offset = current_offset;
+    const uint32_t adpc_chunk_size_offset = current_offset + 4;
+    current_offset += 8;
+    const uint32_t data_chunk_offset_offset = current_offset;
+    const uint32_t data_chunk_size_offset = current_offset + 4;
+    current_offset += 8;
+
+    /* pad */
+    current_offset = pad(current_offset, 0x20, outfile);
+
+    /* begin HEAD chunk header */
+    const uint32_t head_chunk_offset = current_offset;
+    put_32_be_seek(head_chunk_offset, head_chunk_offset_offset, outfile);
+    put_bytes_seek(current_offset, outfile, head_name, 4);
+    current_offset += 8;
+
+    /* HEAD body */
+    const uint32_t head_offset = current_offset;
+    const uint32_t block_size = 0x2000;
+    uint32_t last_block_size;
+    uint32_t last_block_used_bytes;
+    uint32_t block_count;
+    uint32_t head_data_offset_offset;
+    uint32_t samples_per_adpc_entry;
+    uint32_t bytes_per_adpc_entry;
+    {
+        /* chunk list */
+        put_32_be_seek(0x01000000, current_offset, outfile);
+        const uint32_t first_chunk_offset_offset = current_offset + 4;
+        current_offset += 8;
+        put_32_be_seek(0x01000000, current_offset, outfile);
+        const uint32_t second_chunk_offset_offset = current_offset + 4;
+        current_offset += 8;
+        put_32_be_seek(0x01000000, current_offset, outfile);
+        const uint32_t third_chunk_offset_offset = current_offset + 4;
+        current_offset += 8;
+
+        /* first chunk */
+        put_32_be_seek(current_offset-head_offset, first_chunk_offset_offset,
+                outfile);
+        put_byte_seek(2, current_offset, outfile);  /* DSP ADPCM */
+        put_byte((loop_flag != 0),  outfile);
+        put_byte(dsp_count, outfile);
+        put_byte(0, outfile);   /* padding */
+        put_16_be(sample_rate, outfile);
+        put_16_be(0, outfile);  /* padding */
+        put_32_be(nibbles_to_samples(loop_nibble), outfile);    /* loop start */
+        put_32_be(sample_count, outfile);
+        current_offset += 0x10;
+
+        head_data_offset_offset = current_offset;
+        current_offset += 4;
+
+        /* DSP-centric */
+        const uint32_t samples_per_block = nibbles_to_samples(block_size*2);
+        if ( nibbles_to_samples(loop_nibble) % samples_per_block != 0 )
+        {
+            fprintf(stderr, "Warning!\n"
+                    "   Loop start sample %" PRIu32 " is not on "
+                    "a block boundary.\n"
+                    "   The brstm may not loop properly "
+                    "(blocks are %" PRIu32 " samples).\n"
+                    "   This can be solved by adding %" PRIu32 " samples of\n"
+                    "   silence to the beginning of the track.\n\n",
+                    nibbles_to_samples(loop_nibble), samples_per_block,
+                    samples_per_block -
+                    (nibbles_to_samples(loop_nibble) % samples_per_block)
+                    );
+        }
+        block_count = (sample_count + samples_per_block-1) / samples_per_block;
+        put_32_be_seek(block_count, current_offset, outfile);
+        put_32_be(block_size, outfile);
+        put_32_be(samples_per_block, outfile);
+        const uint32_t last_block_samples = sample_count % samples_per_block;
+        last_block_used_bytes = (samples_to_nibbles(last_block_samples)+1)/2;
+        last_block_size = (last_block_used_bytes + 0x1f) / 0x20 * 0x20;
+        put_32_be(last_block_used_bytes, outfile);
+        put_32_be(last_block_samples, outfile);
+        put_32_be(last_block_size, outfile);
+
+        if (options & OPTION_ALTERNATE_ADPC_COUNT)
+            samples_per_adpc_entry = 0x400;
+        else
+            samples_per_adpc_entry = samples_per_block;
+        put_32_be(samples_per_adpc_entry, outfile);
+        bytes_per_adpc_entry = 4;
+        put_32_be(bytes_per_adpc_entry, outfile);
+        current_offset += 0x20;
+
+        /* volume, pan, and channel pairing chunk */
+        put_32_be_seek(current_offset-head_offset, second_chunk_offset_offset,
+                outfile);
+        if (options & OPTION_SECOND_CHUNK_EXTRA)
+        {
+			put_byte_seek(ceil((double)dsp_count/2), current_offset, outfile);
+//			printf("%.02f channel pairs for %d channels\n", ceil((double)dsp_count/2), dsp_count);
+			put_byte(1, outfile);
+			put_16_be(0, outfile);
+			current_offset += 4;
+			for (int i = 0; i < ceil((double)dsp_count/2); i++) {
+				put_32_be(0x01010000, outfile);
+				put_32_be(0x50 + ceil((double)dsp_count/2) * 8 + i * 0xc, outfile);
+				current_offset += 8;
+			}
+			
+			for (int i = 0; i < ceil((double)dsp_count/2); i++) {
+				put_byte(127, outfile); // max volume 
+				put_byte(64, outfile); // centered pan
+				put_16_be(0, outfile);	// padding
+				put_32_be(0, outfile);
+				if (i*2 == dsp_count - 1) {
+					put_byte(1, outfile);	// channels per pair
+					put_byte(i * 2, outfile);
+					put_byte(0, outfile);
+				}
+				else {
+					put_byte(2, outfile);	// channels per pair (1 channel sometimes)
+					put_byte(i * 2, outfile);
+					put_byte(i * 2 + 1, outfile);
+				}
+					
+				put_byte(0, outfile);
+				current_offset += 0xc;
+			}
+       
+	   }
+        else
+        {
+            put_32_be_seek(0x01000000, current_offset, outfile);
+            put_32_be(0x01000000, outfile);
+            put_32_be(0x58, outfile);
+            if (dsp_count == 1)
+                put_32_be(0x01000000, outfile);
+            else
+                put_32_be(0x02000100, outfile);
+            current_offset += 0x10;
+        }
+
+        /* third chunk */
+        put_32_be_seek(current_offset-head_offset, third_chunk_offset_offset,
+                outfile);
+        put_byte_seek(dsp_count, current_offset, outfile);
+        put_bytes(outfile, (const uint8_t *)"\0\0", 3);   /* padding */
+        current_offset += 4;
+        uint32_t channel_info_offset_3x[MAX_CHANNELS];
+        for (int i = 0; i < dsp_count; i++)
+        {
+            put_32_be_seek(0x01000000, current_offset, outfile);
+            current_offset+=4;
+            channel_info_offset_3x[i] = current_offset;
+            current_offset+=4;
+        }
+        uint32_t channel_info_offset_2x[MAX_CHANNELS];
+        for (int i = 0; i < dsp_count; i++)
+        {
+            put_32_be_seek(current_offset-head_offset,
+                    channel_info_offset_3x[i], outfile);
+            put_32_be_seek(0x01000000, current_offset, outfile);
+            current_offset+=4;
+            channel_info_offset_2x[i] = current_offset;
+            current_offset+=4;
+
+            put_32_be_seek(current_offset-head_offset,
+                    channel_info_offset_2x[i], outfile);
+            uint8_t dsp_header_channel_info[0x30];
+            get_bytes_seek(0x1c, infiles[i], dsp_header_channel_info, 0x30);
+            put_bytes(outfile, dsp_header_channel_info, 0x30);
+            current_offset += 0x30;
+        }
+
+        /* pad */
+        current_offset = pad(current_offset, 0x20, outfile);
+
+        /* done with HEAD chunk, store size */
+        put_32_be_seek(current_offset-head_chunk_offset,head_chunk_size_offset,
+                outfile);
+        put_32_be_seek(current_offset-head_chunk_offset,head_chunk_offset+4,
+                outfile);
+    } /* end write HEAD chunk */
+
+    /* begin ADPC chunk header */
+    const uint32_t adpc_chunk_offset = current_offset;
+    put_32_be_seek(adpc_chunk_offset, adpc_chunk_offset_offset, outfile);
+    put_bytes_seek(current_offset, outfile, adpc_name, 4);
+    current_offset += 8;
+
+    /* ADPC body */
+    {
+        uint32_t adpc_blocks;
+        if (options & OPTION_ALTERNATE_ADPC_COUNT)
+        {
+            adpc_blocks = (block_size * (block_count-1) + last_block_size) /
+                0x400 + 1;
+        }
+        else
+        {
+            adpc_blocks = sample_count / samples_per_adpc_entry + 1;
+        }
+
+        /* TODO actually fill in ADPC values */
+        current_offset +=
+            adpc_blocks * bytes_per_adpc_entry * dsp_count;
+
+        /* pad */
+        current_offset = pad(current_offset, 0x20, outfile);
+
+        /* done with ADPC chunk, store size */
+        put_32_be_seek(current_offset-adpc_chunk_offset,adpc_chunk_size_offset,
+                outfile);
+        put_32_be_seek(current_offset-adpc_chunk_offset,adpc_chunk_offset+4,
+                outfile);
+    } /* end write ADPC chunk */
+
+    /* begin DATA chunk header */
+    const uint32_t data_chunk_offset = current_offset;
+    put_32_be_seek(data_chunk_offset, data_chunk_offset_offset, outfile);
+    put_bytes_seek(current_offset, outfile, data_name, 4);
+    current_offset += 8;
+
+    /* DATA body */
+    {
+        uint32_t infile_offset = 0x60;
+        CHECK_ERRNO(fseek(outfile, current_offset, SEEK_SET) != 0, "fseek");
+
+        put_32_be(0x18, outfile);
+        current_offset += 0x18;
+        put_32_be_seek(current_offset, head_data_offset_offset, outfile);
+        CHECK_ERRNO(fseek(outfile, current_offset, SEEK_SET) != 0, "fseek");
+
+        for (uint32_t i = 0; i < block_count; i++)
+        {
+            if (i == block_count-1 && last_block_size) break;
+
+            for (int channel = 0; channel < dsp_count; channel++)
+            {
+                dump(infiles[channel], outfile, infile_offset, block_size);
+                current_offset += block_size;
+            }
+
+            infile_offset += block_size;
+        }
+        if (last_block_size)
+        {
+            for (int channel = 0; channel < dsp_count; channel++)
+            {
+                CHECK_ERRNO(fseek(outfile, current_offset, SEEK_SET) != 0,
+                        "fseek");
+                dump(infiles[channel], outfile, infile_offset,
+                        last_block_used_bytes);
+
+                /* pad */
+                for (uint32_t i = last_block_used_bytes; i < last_block_size;
+                        i++)
+                {
+                    put_byte(0, outfile);
+                }
+                current_offset += last_block_size;
+            }
+        }
+
+        /* pad */
+        current_offset = pad(current_offset, 0x20, outfile);
+
+        /* done with DATA chunk, store size */
+        put_32_be_seek(current_offset-data_chunk_offset,data_chunk_size_offset,
+                outfile);
+        put_32_be_seek(current_offset-data_chunk_offset,data_chunk_offset+4,
+                outfile);
+    } /* end write DATA chunk */
+
+    /* done with file */
+    put_32_be_seek(current_offset, file_size_offset, outfile);
 
     /* close files */
     for (int i = 0; i < dsp_count; i++)
