@@ -34,6 +34,7 @@ enum output_strm
 	BCSTM = 2,
 	BFSTM = 3,
 	SSB_IDSP = 4,
+	TECMO_G1l = 5,
 };
 
 enum odd_options
@@ -61,6 +62,9 @@ static void build(const char *brstm_name, const char *dsp_names [],
 static void build_brstm(const char *brstm_name, const char *dsp_names[],
         int dsp_count, enum odd_options options);
 		
+static void build_g1l(const char *brstm_name, const char *dsp_names[],
+        int dsp_count, enum odd_options options);
+		
 static uint32_t samples_to_nibbles(uint32_t samples);
 static uint32_t nibbles_to_samples(uint32_t nibbles);
 
@@ -77,6 +81,9 @@ static const uint8_t RSTM_sig[4] = {'R','S','T','M'};
 static const uint8_t CSTM_sig[4] = {'C','S','T','M'};
 static const uint8_t FSTM_sig[4] = {'F','S','T','M'};
 static const uint8_t *STRM_sig[4] = {' ','S','T','M'};
+//static const uint8_t g1l_header[8] = {'G', '1','L','_','0','0','0','0'};
+//static const uint8_t bgm_header[6] = {'W','i','i','B','G','M'};
+
 
 static const uint8_t head_name[4] = {'H','E','A','D'};
 static const uint8_t info_name[4] = {'I','N','F','O'};
@@ -162,13 +169,22 @@ int main(int argc, char **argv)
             brstm_name = argv[++i];
         }
 		
-		else if (!strcmp("--build-bfstm", argv[i]))
+		else if (!strcmp("--build-idsp", argv[i]))
         {
             if (mode != MODE_INVALID) usage();
             if (i >= argc-1) usage();
 			
-			strm = 3;
-			memcpy(STRM_sig, FSTM_sig, 4);
+			strm = 4;
+            mode = MODE_BUILD;
+            brstm_name = argv[++i];
+        }
+		
+		else if (!strcmp("--build-g1l", argv[i]))
+        {
+            if (mode != MODE_INVALID) usage();
+            if (i >= argc-1) usage();
+			
+			strm = 5;
             mode = MODE_BUILD;
             brstm_name = argv[++i];
         }
@@ -214,6 +230,12 @@ int main(int argc, char **argv)
 				break;
 				case BCSTM:case BFSTM:
 					build(brstm_name, dsp_names, dsp_count, options, strm);
+				break;
+				case SSB_IDSP:
+					build_idsp(brstm_name, dsp_names, dsp_count, options);
+				break;
+				case TECMO_G1l:
+					build_g1l(brstm_name, dsp_names, dsp_count, options);
 				break;
 			}
             break;
@@ -1014,4 +1036,268 @@ void build_brstm(const char *brstm_name, const char *dsp_names[],
     outfile = NULL;
 
     fprintf(stderr, "Done!\n");
+}
+
+void build_g1l(const char *brstm_name, const char *dsp_names[], int dsp_count, enum odd_options options) {
+	FILE *outfile = NULL;
+    FILE *infiles[MAX_CHANNELS];
+
+    for (int i = 0; i < MAX_CHANNELS; i++)
+    {
+        infiles[i] = NULL;
+    }
+
+    /* announce intentions */
+    fprintf(stderr, "Building %s from:\n",brstm_name);
+    for (int i = 0; i < dsp_count; i++)
+    {
+        fprintf(stderr, "  channel %d: %s\n", i, dsp_names[i]);
+    }
+
+    fprintf(stderr,"\n");
+
+    /* open input files */
+    for (int i = 0; i < dsp_count; i++)
+    {
+        infiles[i] = fopen(dsp_names[i], "rb");
+        CHECK_ERRNO(infiles[i] == NULL, "fopen of input file");
+    }
+
+    /* open output file */
+    outfile = fopen(brstm_name, "wb");
+    CHECK_ERRNO(outfile == NULL, "fopen of output file");
+
+    /* check that the DSPs agree */
+    uint8_t dsp_header0[0x60] = {0};
+
+    get_bytes_seek(0, infiles[0], dsp_header0, 0x1c);
+    for (int i = 1; i < dsp_count; i++)
+    {
+        uint8_t dsp_header1[0x1c];
+        get_bytes_seek(0, infiles[i], dsp_header1, 0x1c);
+        if (memcmp(dsp_header0, dsp_header1, 0x1c))
+        {
+            fprintf(stderr, "DSP headers do not agree\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    /* read important elements of the header */
+    uint32_t nibble_count = read_32_be(dsp_header0 + 4);
+    const uint32_t sample_rate = read_32_be(dsp_header0 + 8);
+    const uint16_t loop_flag = read_16_be(dsp_header0 + 0xc);
+    if (read_16_be(dsp_header0 + 0xe) != 0)
+    {
+        fprintf(stderr, "source file is not DSP ADPCM\n");
+        exit(EXIT_FAILURE);
+    }
+    const uint32_t loop_nibble = read_32_be(dsp_header0 + 0x10);
+
+    /* truncate to loop end (note that standard DSP loop end is the
+     * last nibble played, not one after) */
+    if (loop_flag && read_32_be(dsp_header0 + 0x14)+1 < nibble_count)
+        nibble_count = read_32_be(dsp_header0 + 0x14)+1;
+    const uint32_t sample_count = nibbles_to_samples(nibble_count);
+
+    /* now we can start building the file */
+    uint32_t current_offset = 0;
+    
+    /* begin G1L header */
+	const unsigned char * g1l_header = "G1L_0000";
+	const unsigned char * bgm_header = "WiiBGM";
+    put_bytes_seek(current_offset, outfile, g1l_header, 8);
+    put_32_be(0, outfile);
+	put_32_be(0x1c, outfile);
+	put_32_be(9, outfile);
+	put_32_be(1, outfile);
+	put_32_be(0x1c, outfile);
+	put_bytes(outfile, bgm_header, 6);
+	put_16_be(0, outfile);
+	put_32_be(0x800, outfile);
+	put_32_be(0, outfile);
+	put_32_be(sample_count, outfile);
+	if (nibbles_to_samples(loop_nibble) > 0)
+		put_32_be(nibbles_to_samples(loop_nibble), outfile);
+	else if (nibbles_to_samples(loop_nibble) == 0 && loop_flag == 1)
+		put_32_be(1, outfile);
+	else
+		put_32_be(0, outfile);
+	put_32_be(0, outfile);
+	put_32_be(nibble_count/2, outfile);
+	put_32_be(dsp_count, outfile);
+	put_32_be(sample_rate, outfile);
+	put_32_be(dsp_count/2, outfile);
+	for (int i =0; i < 5; i++)
+		put_32_be(0, outfile);
+	current_offset = 0x5c;
+	for (int i = 0; i < dsp_count; i++) {
+		uint8_t coeffs[0x30];
+		uint32_t loop_end_nibble;
+		put_32_be(sample_count, outfile);
+		put_32_be(nibble_count, outfile);
+		put_32_be(sample_rate, outfile);
+		put_32_be(0, outfile);
+		put_32_be(2, outfile);
+		loop_end_nibble = get_32_be_seek(0x14, infiles[i]);
+		put_32_be(loop_end_nibble, outfile);
+		put_32_be(2, outfile);
+		fseek(infiles[i], 0x1c, SEEK_SET);
+		get_bytes_seek(0x1c, infiles[i], coeffs, 0x30);
+		put_bytes(outfile, coeffs, 0x30);
+		for (int i =0; i < 5; i++)
+			put_32_be(0, outfile);
+		current_offset += 0x60;
+		fseek(infiles[i], 0x60, SEEK_SET);
+	}
+	while (current_offset < 0x81c) {
+		put_32_be(0, outfile);
+		current_offset += 4;
+	}
+	// Writing every DSP 1 byte at a time (1 byte interleave)
+	for (int i = 0; i < nibble_count/2; i++) {
+		for (int j = 0; j < dsp_count; j++) {
+			uint8_t dspByte = get_byte(infiles[j]);
+			put_byte(dspByte, outfile);
+		}
+	}
+	
+	current_offset = ftell(outfile);
+    /* done with file */
+    put_32_be_seek(current_offset, 8, outfile);
+
+    /* close files */
+    for (int i = 0; i < dsp_count; i++)
+    {
+        CHECK_ERRNO(fclose(infiles[i]) != 0, "fclose");
+        infiles[i] = NULL;
+    }
+    CHECK_ERRNO(fclose(outfile) != 0, "fclose");
+    outfile = NULL;
+
+    fprintf(stderr, "Done!\n");		
+}
+
+void build_idsp(const char *brstm_name, const char *dsp_names[], int dsp_count, enum odd_options options) {
+	FILE *outfile = NULL;
+    FILE *infiles[MAX_CHANNELS];
+
+    for (int i = 0; i < MAX_CHANNELS; i++)
+    {
+        infiles[i] = NULL;
+    }
+
+    /* announce intentions */
+    fprintf(stderr, "Building %s from:\n",brstm_name);
+	if (dsp_count > 2)
+		dsp_count = 2;
+    for (int i = 0; i < dsp_count; i++)
+    {
+        fprintf(stderr, "  channel %d: %s\n", i, dsp_names[i]);
+    }
+
+    fprintf(stderr,"\n");
+
+    /* open input files */
+    for (int i = 0; i < dsp_count; i++)
+    {
+        infiles[i] = fopen(dsp_names[i], "rb");
+        CHECK_ERRNO(infiles[i] == NULL, "fopen of input file");
+    }
+
+    /* open output file */
+    outfile = fopen(brstm_name, "wb");
+    CHECK_ERRNO(outfile == NULL, "fopen of output file");
+
+    /* check that the DSPs agree */
+    uint8_t dsp_header0[0x60] = {0};
+
+    get_bytes_seek(0, infiles[0], dsp_header0, 0x1c);
+    for (int i = 1; i < dsp_count; i++)
+    {
+        uint8_t dsp_header1[0x1c];
+        get_bytes_seek(0, infiles[i], dsp_header1, 0x1c);
+        if (memcmp(dsp_header0, dsp_header1, 0x1c))
+        {
+            fprintf(stderr, "DSP headers do not agree\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    /* read important elements of the header */
+    uint32_t nibble_count = read_32_be(dsp_header0 + 4);
+    const uint32_t sample_rate = read_32_be(dsp_header0 + 8);
+    const uint16_t loop_flag = read_16_be(dsp_header0 + 0xc);
+    if (read_16_be(dsp_header0 + 0xe) != 0)
+    {
+        fprintf(stderr, "source file is not DSP ADPCM\n");
+        exit(EXIT_FAILURE);
+    }
+    const uint32_t loop_nibble = read_32_be(dsp_header0 + 0x10);
+
+    /* truncate to loop end (note that standard DSP loop end is the
+     * last nibble played, not one after) */
+    if (loop_flag && read_32_be(dsp_header0 + 0x14)+1 < nibble_count)
+        nibble_count = read_32_be(dsp_header0 + 0x14)+1;
+    const uint32_t sample_count = nibbles_to_samples(nibble_count);
+
+    /* now we can start building the file */
+    uint32_t current_offset = 0;
+    
+    /* begin G1L header */
+	const unsigned char * idsp_header = "IDSP";
+    put_bytes_seek(current_offset, outfile, idsp_header, 4);
+    put_32_be(0, outfile);
+	put_32_be(dsp_count, outfile);
+	put_32_be(sample_rate, outfile);
+	put_32_be(sample_count, outfile);
+	put_32_be(loop_flag * nibbles_to_samples(loop_nibble), outfile);
+	put_32_be(loop_flag * sample_count, outfile);
+	put_32_be(0x10, outfile);
+	put_32_be(0x40, outfile);
+	put_32_be(0x60, outfile);
+	put_32_be(0x40 + dsp_count * 0x60, outfile);
+	put_32_be(nibble_count/2, outfile);
+	for (int i =0; i < 4; i++)
+		put_32_be(0, outfile);
+	current_offset = 0x5c;
+	for (int i = 0; i < dsp_count; i++) {
+		uint8_t coeffs[0x30];
+		uint32_t loop_end_nibble;
+		put_32_be(sample_count, outfile);
+		put_32_be(nibble_count, outfile);
+		put_32_be(sample_rate, outfile);
+		put_16_be(loop_flag, outfile);
+		put_16_be(0, outfile);
+		put_32_be(loop_nibble, outfile);
+		loop_end_nibble = get_32_be_seek(0x14, infiles[i]);
+		put_32_be(loop_end_nibble, outfile);
+		put_32_be(0, outfile);
+		fseek(infiles[i], 0x1c, SEEK_SET);
+		get_bytes_seek(0x1c, infiles[i], coeffs, 0x30);
+		put_bytes(outfile, coeffs, 0x30);
+		for (int i =0; i < 5; i++)
+			put_32_be(0, outfile);
+		current_offset += 0x60;
+		fseek(infiles[i], 0x60, SEEK_SET);
+	}
+	// Writing every DSP 16 bytes at a time (16 byte interleave)
+	for (int i = 0; i < nibble_count/32; i++) {
+		for (int j = 0; j < dsp_count; j++) {
+			for (int k = 0; k < 4; k++) {
+				uint32_t tempData = get_32_be(infiles[j]);
+				put_32_be(tempData, outfile);
+			}
+		}
+	}
+
+    /* close files */
+    for (int i = 0; i < dsp_count; i++)
+    {
+        CHECK_ERRNO(fclose(infiles[i]) != 0, "fclose");
+        infiles[i] = NULL;
+    }
+    CHECK_ERRNO(fclose(outfile) != 0, "fclose");
+    outfile = NULL;
+
+    fprintf(stderr, "Done!\n");		
 }
