@@ -1263,13 +1263,13 @@ void build_idsp(const char *brstm_name, const char *dsp_names[], int dsp_count, 
 	for (int i = 0; i < dsp_count; i++) {
 		uint8_t coeffs[0x30];
 		uint32_t loop_end_nibble;
+		loop_end_nibble = get_32_be_seek(0x14, infiles[i]);
 		put_32_be(sample_count, outfile);
 		put_32_be(nibble_count, outfile);
 		put_32_be(sample_rate, outfile);
 		put_16_be(loop_flag, outfile);
 		put_16_be(0, outfile);
 		put_32_be(loop_nibble, outfile);
-		loop_end_nibble = get_32_be_seek(0x14, infiles[i]);
 		put_32_be(loop_end_nibble, outfile);
 		put_32_be(0, outfile);
 		fseek(infiles[i], 0x1c, SEEK_SET);
@@ -1281,7 +1281,8 @@ void build_idsp(const char *brstm_name, const char *dsp_names[], int dsp_count, 
 		fseek(infiles[i], 0x60, SEEK_SET);
 	}
 	// Writing every DSP 16 bytes at a time (16 byte interleave)
-	for (int i = 0; i < nibble_count/32; i++) {
+	
+	for (int i = 0; i < floor(nibble_count/32); i++) {
 		for (int j = 0; j < dsp_count; j++) {
 			for (int k = 0; k < 4; k++) {
 				uint32_t tempData = get_32_be(infiles[j]);
@@ -1289,7 +1290,18 @@ void build_idsp(const char *brstm_name, const char *dsp_names[], int dsp_count, 
 			}
 		}
 	}
-
+	int remaining_bytes = nibble_count % 32;
+	int padding_bytes = 16-remaining_bytes;
+	if (remaining_bytes > 0)
+		for (int channel = 0; channel < dsp_count; channel++) {
+			uint8_t rb[remaining_bytes];
+			get_bytes(infiles[channel], rb, remaining_bytes);
+			put_bytes(outfile, rb, remaining_bytes);
+			if (padding_bytes > 0) {
+				uint8_t zeroz[16] = {0};
+				put_bytes(outfile, zeroz, padding_bytes);
+			}
+		}
     /* close files */
     for (int i = 0; i < dsp_count; i++)
     {

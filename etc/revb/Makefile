@@ -5,7 +5,7 @@ STRIP=strip
 EXE_EXT=
 
 revb:
-	$(CC) $(CFLAGS) $(LFLAGS) $^ -o $@
+	$(CC) $(CFLAGS) $^ -o $@ $(LFLAGS)
 	$(STRIP) $@
 	
 include Makefile.common
